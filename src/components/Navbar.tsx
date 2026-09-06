@@ -7,11 +7,14 @@ import {
   Plus, 
   Menu, 
   Sparkles,
-  Info
+  Info,
+  Activity
 } from 'lucide-react';
 
 interface NavbarProps {
   user: User | null;
+  activeTab?: 'journal' | 'insights';
+  onSelectTab?: (tab: 'journal' | 'insights') => void;
   onSignOut: () => void;
   onNewEntry: () => void;
   onToggleSidebar: () => void;
@@ -22,6 +25,8 @@ interface NavbarProps {
 
 export const Navbar: React.FC<NavbarProps> = ({
   user,
+  activeTab = 'journal',
+  onSelectTab,
   onSignOut,
   onNewEntry,
   onToggleSidebar,
@@ -61,6 +66,37 @@ export const Navbar: React.FC<NavbarProps> = ({
             </div>
           </div>
         </div>
+
+        {/* Center: Tabs for authenticated user */}
+        {user && onSelectTab && (
+          <nav className="flex items-center gap-1 p-1 bg-stone-950/80 rounded-xl border border-stone-800">
+            <button
+              id="tab-journal"
+              onClick={() => onSelectTab('journal')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                activeTab === 'journal'
+                  ? 'bg-amber-600/20 text-amber-300 border border-amber-500/30 shadow-xs'
+                  : 'text-stone-400 hover:text-stone-200 hover:bg-stone-800/60'
+              }`}
+            >
+              <BookOpen className="w-3.5 h-3.5" />
+              <span>Journal</span>
+            </button>
+
+            <button
+              id="tab-insights"
+              onClick={() => onSelectTab('insights')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                activeTab === 'insights'
+                  ? 'bg-amber-600/20 text-amber-300 border border-amber-500/30 shadow-xs'
+                  : 'text-stone-400 hover:text-stone-200 hover:bg-stone-800/60'
+              }`}
+            >
+              <Activity className="w-3.5 h-3.5" />
+              <span>Insights</span>
+            </button>
+          </nav>
+        )}
 
         {/* Right: Actions & User */}
         {user ? (

@@ -2,22 +2,40 @@ import {
   collection, 
   doc, 
   setDoc, 
+  updateDoc,
   deleteDoc, 
   onSnapshot, 
   query, 
-  orderBy 
+  where,
+  orderBy,
+  limit,
+  getDocs
 } from 'firebase/firestore';
 import { db } from './firebase';
-import { JournalEntry, Turn } from '../types';
+import { JournalEntry, Turn, EntryInsights } from '../types';
 
 /**
- * Strips all undefined keys recursively to prevent Firestore serialization crashes.
- * Complying with strict database persistence hygiene.
+ * Recursively strips all undefined keys and values from objects and arrays
+ * before any Firestore write, ensuring complete database persistence hygiene.
  */
 export function sanitizePayload<T>(obj: T): T {
-  return JSON.parse(
-    JSON.stringify(obj, (_, value) => (value === undefined ? null : value))
-  );
+  const clean = (val: any): any => {
+    if (val === undefined) return null;
+    if (val === null || typeof val !== 'object') return val;
+    if (Array.isArray(val)) {
+      return val
+        .map(clean)
+        .filter((item) => item !== undefined);
+    }
+    const res: Record<string, any> = {};
+    for (const [k, v] of Object.entries(val)) {
+      if (v !== undefined) {
+        res[k] = clean(v);
+      }
+    }
+    return res;
+  };
+  return clean(obj);
 }
 
 /**
@@ -50,6 +68,79 @@ export async function saveJournalEntry(entry: JournalEntry): Promise<void> {
   });
 
   await setDoc(entryDocRef, cleanPayload, { merge: true });
+}
+
+/**
+ * Updates structured metadata (mood, energy, themes) on the same interaction document.
+ * Strips undefined before writing to Firestore.
+ */
+export async function updateEntryMetadata(
+  userId: string,
+  entryId: string,
+  metadata: EntryInsights
+): Promise<void> {
+  if (!userId || !entryId) return;
+  const entryDocRef = doc(db, 'users', userId, 'interactions', entryId);
+
+  const cleanPayload = sanitizePayload({
+    mood: metadata.mood,
+    energy: metadata.energy,
+    themes: metadata.themes,
+    insights: {
+      ...metadata,
+      extractedAt: Date.now(),
+    },
+    updatedAt: Date.now(),
+  });
+
+  await updateDoc(entryDocRef, cleanPayload);
+}
+
+/**
+ * Reads the signed-in user's last 7 days of entries from users/{uid}/interactions.
+ * Scoped strictly to the authenticated caller only, capped at 50 documents.
+ */
+export async function getWeeklyEntries(userId: string): Promise<JournalEntry[]> {
+  if (!userId) return [];
+  const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const interactionsRef = collection(db, 'users', userId, 'interactions');
+
+  // Query scoped to users/{uid}/interactions capped at 50 documents
+  const q = query(
+    interactionsRef,
+    where('updatedAt', '>=', sevenDaysAgo),
+    orderBy('updatedAt', 'desc'),
+    limit(50)
+  );
+
+  try {
+    const snapshot = await getDocs(q);
+    const items: JournalEntry[] = [];
+    snapshot.forEach((d) => {
+      const data = d.data() as JournalEntry;
+      items.push({
+        ...data,
+        id: d.id,
+      });
+    });
+    return items;
+  } catch (err) {
+    // If compound index isn't created yet for where + orderBy, fallback to orderBy with in-memory filter
+    console.warn('Fallback weekly query notice:', err);
+    const fallbackQ = query(interactionsRef, orderBy('updatedAt', 'desc'), limit(50));
+    const snapshot = await getDocs(fallbackQ);
+    const items: JournalEntry[] = [];
+    snapshot.forEach((d) => {
+      const data = d.data() as JournalEntry;
+      if ((data.updatedAt || data.createdAt || 0) >= sevenDaysAgo) {
+        items.push({
+          ...data,
+          id: d.id,
+        });
+      }
+    });
+    return items.slice(0, 50);
+  }
 }
 
 /**

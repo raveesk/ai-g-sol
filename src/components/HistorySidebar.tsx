@@ -226,6 +226,27 @@ export const HistorySidebar: React.FC<HistorySidebarProps> = ({
                       'No content recorded.'}
                   </p>
 
+                  {/* Extracted metadata badges (Insights) */}
+                  {((entry.energy ?? entry.insights?.energy) !== undefined || entry.mood || entry.insights?.mood) && (
+                    <div className="flex items-center gap-1.5 mb-2">
+                      {(entry.energy ?? entry.insights?.energy) && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-950/40 text-amber-300 border border-amber-800/40 font-mono">
+                          ⚡ {entry.energy ?? entry.insights?.energy}/5
+                        </span>
+                      )}
+                      {(entry.mood || entry.insights?.mood) && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-stone-800 text-stone-300 border border-stone-700 capitalize">
+                          {entry.mood || entry.insights?.mood}
+                        </span>
+                      )}
+                      {(entry.themes || entry.insights?.themes)?.[0] && (
+                        <span className="text-[10px] text-stone-400 truncate max-w-[90px]">
+                          #{(entry.themes || entry.insights?.themes)?.[0]}
+                        </span>
+                      )}
+                    </div>
+                  )}
+
                   {/* Metadata Row */}
                   <div className="flex items-center justify-between text-[10px] text-stone-500">
                     <div className="flex items-center gap-1.5">
