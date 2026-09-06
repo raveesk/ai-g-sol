@@ -1,0 +1,8 @@
+{
+  "name": "Reflect & Journal AI",
+  "description": "User-authenticated personal reflections and journaling powered by Gemini 3.6 Flash and Cloud Firestore. - Setup Test 1",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
