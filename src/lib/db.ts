@@ -48,6 +48,26 @@ export function deriveTitleFromPrompt(prompt: string): string {
 }
 
 /**
+ * Ensures the user profile document exists in the 'users' collection
+ * for aggregate counting and user metrics.
+ */
+export async function touchUserDocument(userId: string): Promise<void> {
+  if (!userId) return;
+  try {
+    const userDocRef = doc(db, 'users', userId);
+    await setDoc(
+      userDocRef,
+      sanitizePayload({
+        lastActiveAt: Date.now(),
+      }),
+      { merge: true }
+    );
+  } catch (err) {
+    console.warn('Touch user document notice:', err);
+  }
+}
+
+/**
  * Saves or updates a journal interaction in the user's isolated collection:
  * /users/{userId}/interactions/{interactionId}
  */
@@ -68,6 +88,8 @@ export async function saveJournalEntry(entry: JournalEntry): Promise<void> {
   });
 
   await setDoc(entryDocRef, cleanPayload, { merge: true });
+  // Ensure the user document is tracked in the 'users' collection
+  touchUserDocument(entry.userId).catch(() => {});
 }
 
 /**

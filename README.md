@@ -52,18 +52,26 @@ gcloud services enable \
 
 ## 2. Secret Management Setup
 
-Store your Gemini API key in **Google Cloud Secret Manager** and grant access to the Cloud Run runtime service account:
+Store operational secrets (`GEMINI_API_KEY` and `ADMIN_UIDS`) in **Google Cloud Secret Manager** and grant access to the Cloud Run runtime service account:
 
 ```bash
-# Create and populate the secret in Secret Manager
+# 1. Create and populate the GEMINI_API_KEY secret in Secret Manager
 gcloud secrets create GEMINI_API_KEY --replication-policy="automatic"
 echo -n "YOUR_API_KEY" | gcloud secrets versions add GEMINI_API_KEY --data-file=-
+
+# 2. Create and populate the ADMIN_UIDS allowlist secret (comma-separated Firebase UIDs)
+gcloud secrets create ADMIN_UIDS --replication-policy="automatic"
+echo -n "YOUR_ADMIN_FIREBASE_UID_1,YOUR_ADMIN_FIREBASE_UID_2" | gcloud secrets versions add ADMIN_UIDS --data-file=-
 
 # Retrieve your project number
 PROJECT_NUMBER=$(gcloud projects describe YOUR_PROJECT_ID --format="value(projectNumber)")
 
-# Grant the default Cloud Run service account access to read the secret
+# 3. Grant the default Cloud Run service account access to read both secrets
 gcloud secrets add-iam-policy-binding GEMINI_API_KEY \
+  --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
+  --role="roles/secretmanager.secretAccessor"
+
+gcloud secrets add-iam-policy-binding ADMIN_UIDS \
   --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
   --role="roles/secretmanager.secretAccessor"
 ```
@@ -80,6 +88,11 @@ The application enforces user data isolation through owner-bound rules in `fires
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    // Audit logs: Server-only collection. Deny all direct client reads and writes.
+    match /auditLogs/{logId} {
+      allow read, write: if false;
+    }
+
     // Isolated user-specific data and interactions
     match /users/{userId} {
       allow read, write: if request.auth != null && request.auth.uid == userId;
@@ -104,7 +117,13 @@ firebase deploy --only firestore:rules
 
 ---
 
-## 4. Local Development & Configuration
+## 4. Administrative Access Control
+
+Admin privilege derives from a UID allowlist stored in Secret Manager and injected into the Cloud Run runtime — server-side configuration with no client-writable path to self-elevate. Every admin route verifies the Firebase ID token server-side before any data access; the client only asks the server whether to render the page. Admin scope is deliberately limited to aggregate metrics. Firestore Rules remain strictly owner-bound with no admin exception, so no browser session, including an administrator's, can read another user's entries.
+
+---
+
+## 5. Local Development & Configuration
 
 ```bash
 # 1. Install dependencies
@@ -112,7 +131,7 @@ npm install
 
 # 2. Configure local environment variables
 cp .env.example .env
-# Edit .env and supply your GEMINI_API_KEY for local server testing
+# Edit .env and supply your GEMINI_API_KEY and ADMIN_UIDS for local server testing
 
 # 3. Start unified development server (Express + Vite on http://localhost:3000)
 npm run dev
@@ -120,24 +139,24 @@ npm run dev
 
 ---
 
-## 5. Google Cloud Run Deployment Flow
+## 6. Google Cloud Run Deployment Flow
 
 Build and deploy the application container directly to Cloud Run:
 
 ```bash
-# Deploy to Google Cloud Run
+# Deploy to Google Cloud Run with secret injections
 gcloud run deploy reflect-journal-ai \
   --source . \
   --region us-central1 \
   --platform managed \
   --allow-unauthenticated \
-  --set-secrets="GEMINI_API_KEY=GEMINI_API_KEY:latest" \
+  --set-secrets="GEMINI_API_KEY=GEMINI_API_KEY:latest,ADMIN_UIDS=ADMIN_UIDS:latest" \
   --port 3000
 ```
 
 ---
 
-## 6. Required Campaign Verification Binding
+## 7. Required Campaign Verification Binding
 
 Apply the mandatory challenge label to register your Cloud Run service for automated challenge verification:
 
@@ -149,7 +168,7 @@ gcloud run services update reflect-journal-ai \
 
 ---
 
-## 7. Functional Walkthrough & Verification Guide
+## 8. Functional Walkthrough & Verification Guide
 
 | Test Scenario | Action Performed | Expected Functional Outcome |
 | :--- | :--- | :--- |
@@ -159,3 +178,5 @@ gcloud run services update reflect-journal-ai \
 | **Insights Dashboard** | Switch to the **Insights** tab. | Renders interactive Recharts energy trend line, frequent theme pills with count badges, and mood distribution totals. |
 | **Weekly Synthesis** | Click **Generate Weekly Synthesis**. | Queries the past 7 days of entries (capped at 50 documents) and outputs an empathetic markdown synthesis with actionable takeaways. |
 | **Quota Resilience** | Simulate API credit exhaustion or 429 response. | System falls back gracefully to secondary models or generates an offline analytical synthesis without crashing or dropping user data. |
+| **Authorized Admin Dashboard** | Sign in with an authorized UID specified in `ADMIN_UIDS` and open the Admin Operations panel. | The server cryptographically verifies the Firebase ID token and loads the panel displaying aggregate counts only (`totalUsers`, `totalInteractions`, `interactionsInLast7Days`, `averageInteractionsPerUser`); entry content is never exposed. |
+| **Non-Admin Endpoint Rejection** | Sign in as a standard non-admin user and call `GET /api/admin/stats` directly with a valid Firebase ID token in the `Authorization: Bearer <token>` header. | The server rejects the request with `HTTP 403 Forbidden` (`{"error":"Access denied"}`), completely preventing unauthorized access to system metrics. |

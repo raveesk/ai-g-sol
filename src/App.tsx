@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { 
   auth,
   User, 
@@ -11,7 +11,8 @@ import {
   saveJournalEntry, 
   deleteJournalEntry, 
   deriveTitleFromPrompt,
-  updateEntryMetadata 
+  updateEntryMetadata,
+  touchUserDocument 
 } from './lib/db';
 import { JournalEntry, ReflectionMode, Turn } from './types';
 import { Navbar } from './components/Navbar';
@@ -21,6 +22,7 @@ import { ConversationThread } from './components/ConversationThread';
 import { ReflectionComposer } from './components/ReflectionComposer';
 import { SecurityBadgeModal } from './components/SecurityBadgeModal';
 import { InsightsView } from './components/InsightsView';
+import { AdminView } from './components/AdminView';
 import { 
   ShieldCheck, 
   Sparkles, 
@@ -42,7 +44,89 @@ export default function App() {
   const [entries, setEntries] = useState<JournalEntry[]>([]);
   const [activeEntry, setActiveEntry] = useState<JournalEntry | null>(null);
   const [activeMode, setActiveMode] = useState<ReflectionMode>('reflect');
-  const [activeTab, setActiveTab] = useState<'journal' | 'insights'>('journal');
+  const [activeTab, setActiveTab] = useState<'journal' | 'insights' | 'admin'>('journal');
+  const [isAdmin, setIsAdmin] = useState<boolean>(false);
+  const [isAdminChecking, setIsAdminChecking] = useState<boolean>(false);
+  const lastCheckedAdminUidRef = useRef<string | null>(null);
+
+  // Synchronize route with browser URL history
+  useEffect(() => {
+    const syncRouteFromPath = () => {
+      const path = window.location.pathname;
+      if (path === '/admin') {
+        setActiveTab('admin');
+      } else if (path === '/insights') {
+        setActiveTab('insights');
+      } else {
+        setActiveTab('journal');
+      }
+    };
+
+    syncRouteFromPath();
+    window.addEventListener('popstate', syncRouteFromPath);
+    return () => window.removeEventListener('popstate', syncRouteFromPath);
+  }, []);
+
+  const handleNavigateTab = useCallback((tab: 'journal' | 'insights' | 'admin') => {
+    setActiveTab(tab);
+    const targetPath = tab === 'journal' ? '/' : `/${tab}`;
+    if (window.location.pathname !== targetPath) {
+      window.history.pushState({}, '', targetPath);
+    }
+  }, []);
+
+  // Call GET /api/admin/me once after sign-in to determine admin status
+  useEffect(() => {
+    if (!user) {
+      setIsAdmin(false);
+      setIsAdminChecking(false);
+      lastCheckedAdminUidRef.current = null;
+      return;
+    }
+
+    if (lastCheckedAdminUidRef.current === user.uid) {
+      return;
+    }
+    lastCheckedAdminUidRef.current = user.uid;
+
+    let isMounted = true;
+    setIsAdminChecking(true);
+
+    async function checkAdminMe() {
+      try {
+        const token = await user.getIdToken();
+        const res = await fetch('/api/admin/me', {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
+
+        if (!isMounted) return;
+
+        if (res.ok) {
+          const data = await res.json();
+          setIsAdmin(data.isAdmin === true);
+        } else {
+          setIsAdmin(false);
+        }
+      } catch (err) {
+        console.warn('Admin status check notice:', err);
+        if (isMounted) {
+          setIsAdmin(false);
+        }
+      } finally {
+        if (isMounted) {
+          setIsAdminChecking(false);
+        }
+      }
+    }
+
+    checkAdminMe();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [user]);
 
   // AI & Persistence status
   const [isGenerating, setIsGenerating] = useState<boolean>(false);
@@ -90,6 +174,9 @@ export default function App() {
       setUser(currentUser);
       setAuthLoading(false);
       setAuthError(null);
+      if (currentUser) {
+        touchUserDocument(currentUser.uid).catch(() => {});
+      }
     });
     return () => unsubscribe();
   }, []);
@@ -153,8 +240,8 @@ export default function App() {
     setSaveError(null);
     setLastPendingEntry(null);
     setSidebarOpen(false);
-    setActiveTab('journal');
-  }, []);
+    handleNavigateTab('journal');
+  }, [handleNavigateTab]);
 
   // Select an entry from history
   const handleSelectEntry = useCallback((entry: JournalEntry) => {
@@ -163,8 +250,8 @@ export default function App() {
     setSaveError(null);
     setLastPendingEntry(null);
     setSidebarOpen(false);
-    setActiveTab('journal');
-  }, []);
+    handleNavigateTab('journal');
+  }, [handleNavigateTab]);
 
   // Check if recent entries are missing metadata and extract in background
   useEffect(() => {
@@ -398,13 +485,34 @@ export default function App() {
     }
   };
 
+  // If user is authenticated and on the admin route, render the distinct admin layout
+  if (user && activeTab === 'admin') {
+    return (
+      <>
+        <AdminView
+          user={user}
+          isAdmin={isAdmin}
+          isAdminChecking={isAdminChecking}
+          onReturnToJournal={() => handleNavigateTab('journal')}
+          onSignOut={handleSignOut}
+        />
+        <SecurityBadgeModal
+          isOpen={securityModalOpen}
+          onClose={() => setSecurityModalOpen(false)}
+          userId={user.uid}
+        />
+      </>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-stone-950 text-stone-100 flex flex-col font-sans selection:bg-amber-500/20 selection:text-amber-200">
       {/* Top Navigation */}
       <Navbar
         user={user}
         activeTab={activeTab}
-        onSelectTab={setActiveTab}
+        onSelectTab={handleNavigateTab}
+        isAdmin={isAdmin}
         onSignOut={handleSignOut}
         onNewEntry={handleNewEntry}
         onToggleSidebar={() => setSidebarOpen((prev) => !prev)}
@@ -442,11 +550,11 @@ export default function App() {
                 onNavigateToEntry={(id) => {
                   const found = entries.find((e) => e.id === id);
                   if (found) handleSelectEntry(found);
-                  setActiveTab('journal');
+                  handleNavigateTab('journal');
                 }}
                 onNewReflection={() => {
                   handleNewEntry();
-                  setActiveTab('journal');
+                  handleNavigateTab('journal');
                 }}
               />
             </main>

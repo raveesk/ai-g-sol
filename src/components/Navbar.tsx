@@ -13,8 +13,9 @@ import {
 
 interface NavbarProps {
   user: User | null;
-  activeTab?: 'journal' | 'insights';
-  onSelectTab?: (tab: 'journal' | 'insights') => void;
+  activeTab?: 'journal' | 'insights' | 'admin';
+  onSelectTab?: (tab: 'journal' | 'insights' | 'admin') => void;
+  isAdmin?: boolean;
   onSignOut: () => void;
   onNewEntry: () => void;
   onToggleSidebar: () => void;
@@ -27,6 +28,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   user,
   activeTab = 'journal',
   onSelectTab,
+  isAdmin = false,
   onSignOut,
   onNewEntry,
   onToggleSidebar,
@@ -95,6 +97,21 @@ export const Navbar: React.FC<NavbarProps> = ({
               <Activity className="w-3.5 h-3.5" />
               <span>Insights</span>
             </button>
+
+            {isAdmin && (
+              <button
+                id="tab-admin"
+                onClick={() => onSelectTab('admin')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                  activeTab === 'admin'
+                    ? 'bg-rose-950/50 text-rose-300 border border-rose-800/60 shadow-xs'
+                    : 'text-stone-400 hover:text-stone-200 hover:bg-stone-800/60'
+                }`}
+              >
+                <ShieldCheck className="w-3.5 h-3.5" />
+                <span>Admin</span>
+              </button>
+            )}
           </nav>
         )}
 

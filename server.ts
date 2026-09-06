@@ -3,6 +3,10 @@ import path from 'path';
 import dotenv from 'dotenv';
 import { GoogleGenAI, Type } from '@google/genai';
 import { createServer as createViteServer } from 'vite';
+import { requireAdmin, getAdminFirestore } from './server/middleware/requireAdmin';
+import { FieldValue } from 'firebase-admin/firestore';
+
+export { requireAdmin, getAdminFirestore };
 
 dotenv.config();
 
@@ -321,6 +325,140 @@ async function startServer() {
       service: 'Reflect & Journal AI Backend',
       timestamp: Date.now(),
     });
+  });
+
+  // Admin verification endpoint protected by requireAdmin middleware
+  app.get('/api/admin/verify', requireAdmin, (req: Request, res: Response) => {
+    res.json({
+      success: true,
+      message: 'Admin authorization confirmed',
+      timestamp: Date.now(),
+    });
+  });
+
+  // GET /api/admin/me endpoint protected by requireAdmin middleware
+  // Returns { isAdmin: true } for verified administrators
+  app.get('/api/admin/me', requireAdmin, (_req: Request, res: Response) => {
+    res.json({ isAdmin: true });
+  });
+
+  // Admin stats endpoint protected by requireAdmin middleware
+  // Computes aggregate statistics using Firestore count aggregations
+  // Strictly returns NO entry text, NO Gemini responses, and NO per-user identifiers
+  app.get('/api/admin/stats', requireAdmin, async (req: Request, res: Response): Promise<void> => {
+    try {
+      const firestore = getAdminFirestore();
+
+      // 1. Total users: computed via Firestore count aggregation on 'users' collection
+      let totalUsers = 0;
+      try {
+        const usersCollection = firestore.collection('users');
+        const usersCountSnap = await usersCollection.count().get();
+        totalUsers = usersCountSnap.data().count;
+      } catch (userCountErr) {
+        console.warn('[admin/stats] users collection count aggregation notice:', userCountErr);
+      }
+
+      // 2. Total interactions: computed via Firestore collectionGroup count aggregation
+      let totalInteractions = 0;
+      const interactionsGroup = firestore.collectionGroup('interactions');
+      try {
+        const interactionsCountSnap = await interactionsGroup.count().get();
+        totalInteractions = interactionsCountSnap.data().count;
+      } catch (intCountErr) {
+        console.warn('[admin/stats] interactions collectionGroup count aggregation notice:', intCountErr);
+      }
+
+      // 3. Interactions in the last 7 days: computed via Firestore count aggregation with timestamp filter
+      const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+      let interactionsInLast7Days = 0;
+      try {
+        const recentQuery = interactionsGroup.where('updatedAt', '>=', sevenDaysAgo);
+        const recentSnap = await recentQuery.count().get();
+        interactionsInLast7Days = recentSnap.data().count;
+      } catch (recentErr) {
+        console.warn('[admin/stats] recent interactions count query notice:', recentErr);
+        try {
+          const fallbackQuery = interactionsGroup.where('createdAt', '>=', sevenDaysAgo);
+          const fallbackSnap = await fallbackQuery.count().get();
+          interactionsInLast7Days = fallbackSnap.data().count;
+        } catch {
+          interactionsInLast7Days = 0;
+        }
+      }
+
+      // 4. Average interactions per user: computed from aggregations
+      const averageInteractionsPerUser = totalUsers > 0
+        ? Math.round((totalInteractions / totalUsers) * 100) / 100
+        : 0;
+
+      // 5. Append-only audit record written server-side via the Admin SDK on every successful call
+      try {
+        const actorUid = req.adminUser?.uid || 'unknown_admin';
+        await firestore.collection('auditLogs').add({
+          actorUid,
+          actor: actorUid,
+          action: 'get_admin_stats',
+          serverTimestamp: FieldValue.serverTimestamp(),
+          timestamp: FieldValue.serverTimestamp(),
+          createdAt: FieldValue.serverTimestamp(),
+        });
+      } catch (auditErr) {
+        console.warn('[admin/stats] Failed to record audit log:', auditErr);
+      }
+
+      // Return strictly aggregate metrics:
+      // NO entry text, NO Gemini responses, and NO per-user identifiers
+      res.json({
+        totalUsers,
+        totalInteractions,
+        interactionsInLast7Days,
+        interactionsLast7Days: interactionsInLast7Days,
+        averageInteractionsPerUser,
+      });
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      console.error('[api/admin/stats] Failed to retrieve administrative statistics:', errMsg);
+      res.status(500).json({ error: 'Failed to retrieve administrative statistics' });
+    }
+  });
+
+  // Admin audit logs endpoint protected by requireAdmin middleware
+  // Surfaces append-only audit trail records from the server-only auditLogs collection
+  app.get('/api/admin/audit-logs', requireAdmin, async (_req: Request, res: Response): Promise<void> => {
+    try {
+      const firestore = getAdminFirestore();
+      const snapshot = await firestore
+        .collection('auditLogs')
+        .orderBy('serverTimestamp', 'desc')
+        .limit(20)
+        .get();
+
+      const logs = snapshot.docs.map((doc) => {
+        const d = doc.data();
+        let ts = Date.now();
+        if (d.serverTimestamp && typeof d.serverTimestamp.toMillis === 'function') {
+          ts = d.serverTimestamp.toMillis();
+        } else if (d.timestamp && typeof d.timestamp.toMillis === 'function') {
+          ts = d.timestamp.toMillis();
+        } else if (typeof d.timestamp === 'number') {
+          ts = d.timestamp;
+        }
+
+        return {
+          id: doc.id,
+          actorUid: d.actorUid || d.actor || 'unknown',
+          action: d.action || 'unknown',
+          timestamp: ts,
+        };
+      });
+
+      res.json({ logs });
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      console.error('[api/admin/audit-logs] Failed to retrieve audit logs:', errMsg);
+      res.status(500).json({ error: 'Failed to retrieve audit logs' });
+    }
   });
 
   // AI Reflection and Conversation Endpoint
